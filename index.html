@@ -1209,6 +1209,242 @@ function parseAndRender(wb){
 // ═══════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════
+const OPEN_STATUS_SET = new Set(['Pendente','Faturado','Faturado Parcial','Recebido Parcial']);
+
+function resolvePedidoStatus(statuses){
+  const clean = [...new Set(statuses.filter(Boolean))];
+  if(!clean.length) return '';
+  if(clean.length === 1) return clean[0];
+  if(clean.includes('Pendente')) return 'Pendente';
+  if(clean.includes('Recebido Parcial')) return 'Recebido Parcial';
+  if(clean.includes('Faturado Parcial')) return 'Faturado Parcial';
+  if(clean.includes('Faturado') && (clean.includes('Recebido') || clean.includes('Encerrado'))) return 'Recebido Parcial';
+  if(clean.includes('Faturado')) return 'Faturado';
+  if(clean.includes('Recebido')) return 'Recebido';
+  if(clean.includes('Encerrado')) return 'Encerrado';
+  return clean[0];
+}
+
+function renderKPIs(){
+  const k = D.kpis;
+  const items = [
+    {cls:'gold',icon:'PC',label:'Total de Pedidos (PCs)',val:fmtN(k.total_pedidos),sub:'Marck + Grattano'},
+    {cls:'red',icon:'PD',label:'Pendentes',val:k.pedidos_pendentes,sub:`${fmtR(k.valor_pendente)} em aberto`,danger:true},
+    {cls:'orange',icon:'AB',label:'Itens em Aberto',val:k.pedidos_em_aberto,sub:`${fmtR(k.valor_em_aberto)} em aberto`},
+    {cls:'teal',icon:'OK',label:'Pedidos Recebidos',val:fmtN(k.pedidos_recebidos),sub:'PCs unicos com status Recebido'},
+    {cls:'blue',icon:'LT',label:'Lead Time Mediana',val:`${k.lead_time_median}d`,sub:`${k.lead_time_mean}d media`},
+    {cls:'purple',icon:'PMP',label:'PMP Medio',val:`${k.pmp_medio}d`,sub:'Prazo medio de pagamento'},
+  ];
+  document.getElementById('kpiGrid').innerHTML = items.map(it=>`
+    <div class="kpi ${it.cls}">
+      <div class="kpi-icon">${it.icon}</div>
+      <div class="kpi-label">${it.label}</div>
+      <div class="kpi-value${it.danger?' danger':''}">${it.val}</div>
+      <div class="kpi-sub">${it.sub}</div>
+    </div>`).join('');
+}
+
+function empProgressBlock(total, status){
+  const safeTotal = total || 1;
+  const rows = [
+    {label:'Recebido',val:status.Recebido||0,col:'var(--green)'},
+    {label:'Pendente',val:status.Pendente||0,col:'var(--red)'},
+    {label:'Parcial/Faturado',val:(status['Recebido Parcial']||0)+(status['Faturado Parcial']||0)+(status['Faturado']||0),col:'var(--orange)'},
+    {label:'Encerrado',val:status.Encerrado||0,col:'var(--text3)'},
+  ];
+  return rows.filter(r=>r.val>0).map(r=>`
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:4px">
+        <span>${r.label}</span><span style="font-family:var(--font-mono);font-weight:600">${r.val}</span>
+      </div>
+      <div class="progress-bg"><div class="progress-fill" style="width:${(r.val/safeTotal*100).toFixed(1)}%;background:${r.col}"></div></div>
+    </div>`).join('');
+}
+
+function renderEmpresaStats(){
+  const fallbackStatus = {
+    Marck:{Recebido:162,Pendente:5,Encerrado:5,'Faturado Parcial':1,'Recebido Parcial':1},
+    Grattano:{Recebido:249,Pendente:5,Encerrado:11,'Faturado Parcial':2,'Recebido Parcial':2},
+  };
+  const k = D.kpis;
+  const statusMarck = D.empresa_status?.Marck || fallbackStatus.Marck;
+  const statusGrattano = D.empresa_status?.Grattano || fallbackStatus.Grattano;
+  document.getElementById('empMarckStats').innerHTML = `
+    <div style="display:flex;gap:20px;margin-bottom:14px">
+      <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.7px">Pedidos (PCs)</div><div style="font-family:var(--font-display);font-size:24px;font-weight:800;color:var(--blue)">${fmtN(k.marck_pedidos)}</div></div>
+      <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.7px">Valor Total</div><div style="font-family:var(--font-display);font-size:24px;font-weight:800;color:var(--gold)">${fmtR(k.marck_valor)}</div></div>
+    </div>
+    ${empProgressBlock(k.marck_pedidos,statusMarck)}`;
+
+  document.getElementById('empGrattanoStats').innerHTML = `
+    <div style="display:flex;gap:20px;margin-bottom:14px">
+      <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.7px">Pedidos (PCs)</div><div style="font-family:var(--font-display);font-size:24px;font-weight:800;color:var(--teal)">${fmtN(k.grattano_pedidos)}</div></div>
+      <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.7px">Valor Total</div><div style="font-family:var(--font-display);font-size:24px;font-weight:800;color:var(--gold)">${fmtR(k.grattano_valor)}</div></div>
+    </div>
+    ${empProgressBlock(k.grattano_pedidos,statusGrattano)}`;
+}
+
+function parseAndRender(wb){
+  try{
+    const ws_pc  = wb.Sheets['Pedidos de Compra'];
+    const ws_nf  = wb.Sheets['NF de Recebimentos'];
+    if(!ws_pc){ renderAll(); return; }
+
+    const pc_rows = XLSX.utils.sheet_to_json(ws_pc, {defval:null});
+    const nf_rows = ws_nf ? XLSX.utils.sheet_to_json(ws_nf, {defval:null}) : [];
+
+    const fixKey = o=>{ const n={}; for(const k in o) n[k.trim()]=o[k]; return n; };
+    const pc = pc_rows.map(fixKey);
+    const nf = nf_rows.map(fixKey);
+
+    const pedidosMap = new Map();
+    pc.forEach(r=>{
+      const pedido = String(r['PC']||'').trim();
+      if(!pedido) return;
+      if(!pedidosMap.has(pedido)){
+        pedidosMap.set(pedido,{
+          pc: pedido,
+          rows: [],
+          statuses: new Set(),
+          empresa: String(r['Empresa']||''),
+          valor_total: 0,
+          valor_pendente: 0,
+          valor_aberto: 0,
+        });
+      }
+      const item = pedidosMap.get(pedido);
+      const status = String(r['Status PC']||'').trim();
+      const valor = +r['Custo Total']||0;
+      item.rows.push(r);
+      if(status) item.statuses.add(status);
+      if(!item.empresa && r['Empresa']) item.empresa = String(r['Empresa']||'');
+      item.valor_total += valor;
+      if(status === 'Pendente') item.valor_pendente += valor;
+      if(OPEN_STATUS_SET.has(status)) item.valor_aberto += valor;
+    });
+
+    const pedidos = [...pedidosMap.values()].map(p=>({
+      ...p,
+      status_pc: resolvePedidoStatus([...p.statuses]),
+    }));
+
+    const spc = {};
+    pedidos.forEach(p=>{ if(p.status_pc) spc[p.status_pc]=(spc[p.status_pc]||0)+1; });
+
+    const pendentes = pedidos.filter(p=>OPEN_STATUS_SET.has(p.status_pc));
+    const apenas_pend = pedidos.filter(p=>p.status_pc==='Pendente');
+    const valor_pend = pendentes.reduce((a,p)=>a+p.valor_aberto,0);
+
+    const monthly = {};
+    pc.forEach(r=>{
+      const d = r['Data PC'] ? new Date(r['Data PC']) : null;
+      if(!d||isNaN(d)) return;
+      const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      if(!monthly[key]) monthly[key]={qtd:new Set(),valor:0};
+      monthly[key].qtd.add(r['PC']);
+      monthly[key].valor += +r['Custo Total']||0;
+    });
+    const monthly_final = {};
+    Object.keys(monthly).sort().slice(-15).forEach(k=>{
+      monthly_final[k]={qtd:monthly[k].qtd.size,valor:Math.round(monthly[k].valor)};
+    });
+
+    const monthly_rec = {};
+    nf.forEach(r=>{
+      const d = r['DT. PC'] ? new Date(r['DT. PC']) : null;
+      if(!d||isNaN(d)) return;
+      const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      if(!monthly_rec[key]) monthly_rec[key]={qtd:0,valor:0,leads:[]};
+      monthly_rec[key].qtd++;
+      monthly_rec[key].valor += +r['Custo Total']||0;
+      const rec = r['Dt.Rec'] ? new Date(r['Dt.Rec']) : null;
+      if(rec&&!isNaN(rec)) monthly_rec[key].leads.push((rec-d)/864e5);
+    });
+    const monthly_rec_final = {};
+    Object.keys(monthly_rec).sort().slice(-15).forEach(k=>{
+      const leads = monthly_rec[k].leads;
+      const med = leads.length ? leads.sort((a,b)=>a-b)[Math.floor(leads.length/2)] : 0;
+      monthly_rec_final[k]={qtd:monthly_rec[k].qtd,valor:Math.round(monthly_rec[k].valor),lead:Math.round(med)};
+    });
+
+    const pont={}, pont_m={}, pont_g={};
+    nf.forEach(r=>{
+      const s=r['Status Entrega']; const e=r['Empresa'];
+      if(s){ pont[s]=(pont[s]||0)+1; }
+      if(s&&e==='Marck')    pont_m[s]=(pont_m[s]||0)+1;
+      if(s&&e==='Grattano') pont_g[s]=(pont_g[s]||0)+1;
+    });
+
+    const forn_val = {};
+    pc.forEach(r=>{ const f=r['Fornecedor']; if(f) forn_val[f]=(forn_val[f]||0)+(+r['Custo Total']||0); });
+    const top_forn = Object.entries(forn_val).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([nome,valor])=>({nome,valor:Math.round(valor)}));
+
+    const pend_detail = pc
+      .filter(r=>r['Status PC']==='Pendente')
+      .sort((a,b)=>(+b['Custo Total']||0)-(+a['Custo Total']||0))
+      .slice(0,60)
+      .map(r=>({
+        pc:String(r['PC']||''), produto:String(r['Prod.Entr']||''),
+        desc:String(r['Desc. Resumida']||'').slice(0,55),
+        fornecedor:String(r['Fornecedor']||'').slice(0,30),
+        data_pc: r['Data PC'] ? new Date(r['Data PC']).toISOString().slice(0,10) : '',
+        prev_rec: r['Prev. Rec.'] ? new Date(r['Prev. Rec.']).toISOString().slice(0,10) : '',
+        qtd:+r['Qtd.']||0, valor:+r['Custo Total']||0,
+        empresa:String(r['Empresa']||''), status_pc:String(r['Status PC']||''),status:String(r['Status']||''),
+      }));
+
+    const emp_ped = {Marck:new Set(),Grattano:new Set()};
+    const emp_val = {Marck:0,Grattano:0};
+    pc.forEach(r=>{const e=r['Empresa'];if(e){emp_ped[e]?.add(r['PC']);emp_val[e]=(emp_val[e]||0)+(+r['Custo Total']||0);}});
+    const empresa_status = {Marck:{},Grattano:{}};
+    pedidos.forEach(p=>{
+      if(!empresa_status[p.empresa] || !p.status_pc) return;
+      empresa_status[p.empresa][p.status_pc] = (empresa_status[p.empresa][p.status_pc]||0) + 1;
+    });
+
+    const leads = nf.map(r=>{
+      const d=r['DT. PC']?new Date(r['DT. PC']):null;
+      const rec=r['Dt.Rec']?new Date(r['Dt.Rec']):null;
+      return(d&&rec&&!isNaN(d)&&!isNaN(rec))?(rec-d)/864e5:null;
+    }).filter(v=>v!==null&&v>=0&&v<500);
+    leads.sort((a,b)=>a-b);
+    const lead_med = leads.length ? leads[Math.floor(leads.length/2)] : 16;
+    const lead_mean = leads.length ? leads.reduce((a,b)=>a+b,0)/leads.length : 23;
+
+    D = {
+      ...D,
+      kpis:{
+        total_pedidos: pedidos.length,
+        pedidos_pendentes: apenas_pend.length,
+        valor_pendente: Math.round(apenas_pend.reduce((a,p)=>a+p.valor_pendente,0)*100)/100,
+        pedidos_em_aberto: pendentes.length,
+        valor_em_aberto: Math.round(valor_pend*100)/100,
+        pedidos_recebidos: spc['Recebido']||0,
+        lead_time_median: Math.round(lead_med),
+        lead_time_mean: Math.round(lead_mean),
+        pmp_medio: 35,
+        atrasados_pct: pont['Atrasado']?+(pont['Atrasado']/(Object.values(pont).reduce((a,b)=>a+b,0))*100).toFixed(1):59.3,
+        total_valor: Math.round(pc.reduce((a,r)=>a+(+r['Custo Total']||0),0)),
+        marck_valor: Math.round(emp_val.Marck||0),
+        grattano_valor: Math.round(emp_val.Grattano||0),
+        marck_pedidos: emp_ped.Marck?.size||0,
+        grattano_pedidos: emp_ped.Grattano?.size||0,
+      },
+      empresa_status,
+      status_pc: spc,
+      pontualidade: pont,
+      pontualidade_marck: pont_m,
+      pontualidade_grattano: pont_g,
+      monthly: monthly_final,
+      monthly_rec: monthly_rec_final,
+      top_fornecedores: top_forn,
+      pendentes: pend_detail,
+    };
+
+    renderAll();
+  }catch(e){ console.error('parseAndRender:',e); renderAll(); }
+}
+
 function switchTab(id, btn){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
