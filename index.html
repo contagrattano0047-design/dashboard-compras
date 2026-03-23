@@ -632,7 +632,7 @@ const DEFAULT = {
     total_pedidos:448, pedidos_pendentes:71,
     valor_pendente:4409877.86, pedidos_em_aberto:89,
     valor_em_aberto:4756218.86, pedidos_recebidos:786,
-    lead_time_median:16, lead_time_mean:23, pmp_medio:35,
+    lead_time_median:16, lead_time_mean:23, pmp_medio:0,
     atrasados_pct:59.3, total_valor:26045661.43,
     marck_valor:20945173.55, grattano_valor:5100487.88,
     marck_pedidos:174, grattano_pedidos:269,
@@ -1184,7 +1184,7 @@ function parseAndRender(wb){
         pedidos_recebidos: spc['Recebido']||0,
         lead_time_median: Math.round(lead_med),
         lead_time_mean: Math.round(lead_mean),
-        pmp_medio: 35,
+        pmp_medio: 0,
         atrasados_pct: pont['Atrasado']?+(pont['Atrasado']/(Object.values(pont).reduce((a,b)=>a+b,0))*100).toFixed(1):59.3,
         total_valor: Math.round(pc.reduce((a,r)=>a+(+r['Custo Total']||0),0)),
         marck_valor: Math.round(emp_val.Marck||0),
@@ -1233,7 +1233,7 @@ function renderKPIs(){
     {cls:'orange',icon:'AB',label:'Itens em Aberto',val:k.pedidos_em_aberto,sub:`${fmtR(k.valor_em_aberto)} em aberto`},
     {cls:'teal',icon:'OK',label:'Pedidos Recebidos',val:fmtN(k.pedidos_recebidos),sub:'PCs unicos com status Recebido'},
     {cls:'blue',icon:'LT',label:'Lead Time Mediana',val:`${k.lead_time_median}d`,sub:`${k.lead_time_mean}d media`},
-    {cls:'purple',icon:'PMP',label:'PMP Medio',val:`${k.pmp_medio}d`,sub:'Prazo medio de pagamento'},
+    {cls:'purple',icon:'PMP',label:'PMP Medio',val:`${k.pmp_medio}d`,sub:'Nao calculado'},
   ];
   document.getElementById('kpiGrid').innerHTML = items.map(it=>`
     <div class="kpi ${it.cls}">
@@ -1380,9 +1380,8 @@ function parseAndRender(wb){
     const top_forn = Object.entries(forn_val).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([nome,valor])=>({nome,valor:Math.round(valor)}));
 
     const pend_detail = pc
-      .filter(r=>r['Status PC']==='Pendente')
+      .filter(r=>OPEN_STATUS_SET.has(String(r['Status PC']||'').trim()))
       .sort((a,b)=>(+b['Custo Total']||0)-(+a['Custo Total']||0))
-      .slice(0,60)
       .map(r=>({
         pc:String(r['PC']||''), produto:String(r['Prod.Entr']||''),
         desc:String(r['Desc. Resumida']||'').slice(0,55),
@@ -1422,7 +1421,7 @@ function parseAndRender(wb){
         pedidos_recebidos: spc['Recebido']||0,
         lead_time_median: Math.round(lead_med),
         lead_time_mean: Math.round(lead_mean),
-        pmp_medio: 35,
+        pmp_medio: 0,
         atrasados_pct: pont['Atrasado']?+(pont['Atrasado']/(Object.values(pont).reduce((a,b)=>a+b,0))*100).toFixed(1):59.3,
         total_valor: Math.round(pc.reduce((a,r)=>a+(+r['Custo Total']||0),0)),
         marck_valor: Math.round(emp_val.Marck||0),
@@ -1443,6 +1442,132 @@ function parseAndRender(wb){
 
     renderAll();
   }catch(e){ console.error('parseAndRender:',e); renderAll(); }
+}
+
+function renderPendTable(){
+  const q   = (document.getElementById('pendSearch')?.value||'').toLowerCase();
+  const sf  = document.getElementById('pendStatusFilter')?.value||'';
+
+  let items = D.pendentes.filter(r=>{
+    if(_pendEmp!=='all' && r.empresa!==_pendEmp) return false;
+    if(sf && r.status_pc!==sf) return false;
+    if(q){
+      const hay = `${r.pc} ${r.produto} ${r.desc} ${r.fornecedor}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('pendTbody').innerHTML = items.map(r=>{
+    const days = daysFrom(r.prev_rec);
+    return`<tr>
+      <td class="mono bold">${r.pc}</td>
+      <td class="mono">${r.produto}</td>
+      <td class="bold" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.desc}</td>
+      <td>${r.fornecedor}</td>
+      <td class="mono">${r.data_pc||'â€”'}</td>
+      <td class="mono">${r.prev_rec||'â€”'}</td>
+      <td>${daysBadge(days)}</td>
+      <td class="num">${fmtN(r.qtd)}</td>
+      <td class="num bold">${fmtR(r.valor)}</td>
+      <td><span class="badge ${r.empresa==='Marck'?'badge-faturado':'badge-partial'}">${r.empresa}</span></td>
+      <td>${statusBadge(r.status_pc)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text3)">Nenhum resultado</td></tr>`;
+}
+
+function renderTopForn(){
+  const forn = Array.isArray(D.top_fornecedores) ? D.top_fornecedores.filter(f=>f && f.nome && Number.isFinite(+f.valor)) : [];
+  if(!forn.length){
+    document.getElementById('topFornChart').innerHTML = `<div style="padding:12px 0;color:var(--text3)">Sem dados de fornecedores.</div>`;
+    return;
+  }
+  const max = Math.max(...forn.map(f=>+f.valor), 1);
+  const colors = ['var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--purple)','var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--red)'];
+  document.getElementById('topFornChart').innerHTML = forn.map((f,i)=>`
+    <div class="bar-row">
+      <div class="bar-name">${f.nome}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${((+f.valor/max)*100).toFixed(1)}%;background:${colors[i%colors.length]}"></div></div>
+      <div class="bar-num">${fmtR(+f.valor)}</div>
+    </div>`).join('');
+}
+
+function renderFornTable(){
+  const q = (document.getElementById('fornSearch')?.value||'').toLowerCase();
+  const base = Array.isArray(D.top_fornecedores) ? D.top_fornecedores.filter(f=>f && f.nome && Number.isFinite(+f.valor)) : [];
+  const forn = base.filter(f=>!q || f.nome.toLowerCase().includes(q));
+  const grandTotal = forn.reduce((a,b)=>a+(+b.valor||0),0);
+  document.getElementById('fornTbody').innerHTML = forn.map(f=>`
+    <tr>
+      <td class="bold">${f.nome}</td>
+      <td class="num">â€”</td>
+      <td class="num bold">${fmtFull(+f.valor)}</td>
+      <td class="num">${grandTotal ? ((+f.valor/grandTotal)*100).toFixed(1) : '0.0'}%</td>
+      <td style="color:var(--text3)">â€”</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">Nenhum fornecedor encontrado</td></tr>`;
+}
+
+function renderPendTable(){
+  const q   = (document.getElementById('pendSearch')?.value||'').toLowerCase();
+  const sf  = document.getElementById('pendStatusFilter')?.value||'';
+
+  const items = D.pendentes.filter(r=>{
+    if(_pendEmp!=='all' && r.empresa!==_pendEmp) return false;
+    if(sf && r.status_pc!==sf) return false;
+    if(q){
+      const hay = `${r.pc} ${r.produto} ${r.desc} ${r.fornecedor}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('pendTbody').innerHTML = items.map(r=>{
+    const days = daysFrom(r.prev_rec);
+    return`<tr>
+      <td class="mono bold">${r.pc}</td>
+      <td class="mono">${r.produto}</td>
+      <td class="bold" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.desc}</td>
+      <td>${r.fornecedor}</td>
+      <td class="mono">${r.data_pc||'-'}</td>
+      <td class="mono">${r.prev_rec||'-'}</td>
+      <td>${daysBadge(days)}</td>
+      <td class="num">${fmtN(r.qtd)}</td>
+      <td class="num bold">${fmtR(r.valor)}</td>
+      <td><span class="badge ${r.empresa==='Marck'?'badge-faturado':'badge-partial'}">${r.empresa}</span></td>
+      <td>${statusBadge(r.status_pc)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text3)">Nenhum resultado</td></tr>`;
+}
+
+function renderTopForn(){
+  const forn = Array.isArray(D.top_fornecedores) ? D.top_fornecedores.filter(f=>f && f.nome && Number.isFinite(+f.valor)) : [];
+  if(!forn.length){
+    document.getElementById('topFornChart').innerHTML = `<div style="padding:12px 0;color:var(--text3)">Sem dados de fornecedores.</div>`;
+    return;
+  }
+  const max = Math.max(...forn.map(f=>+f.valor), 1);
+  const colors = ['var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--purple)','var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--red)'];
+  document.getElementById('topFornChart').innerHTML = forn.map((f,i)=>`
+    <div class="bar-row">
+      <div class="bar-name">${f.nome}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${((+f.valor/max)*100).toFixed(1)}%;background:${colors[i%colors.length]}"></div></div>
+      <div class="bar-num">${fmtR(+f.valor)}</div>
+    </div>`).join('');
+}
+
+function renderFornTable(){
+  const q = (document.getElementById('fornSearch')?.value||'').toLowerCase();
+  const base = Array.isArray(D.top_fornecedores) ? D.top_fornecedores.filter(f=>f && f.nome && Number.isFinite(+f.valor)) : [];
+  const forn = base.filter(f=>!q || f.nome.toLowerCase().includes(q));
+  const grandTotal = forn.reduce((a,b)=>a+(+b.valor||0),0);
+  document.getElementById('fornTbody').innerHTML = forn.map(f=>`
+    <tr>
+      <td class="bold">${f.nome}</td>
+      <td class="num">-</td>
+      <td class="num bold">${fmtFull(+f.valor)}</td>
+      <td class="num">${grandTotal ? ((+f.valor/grandTotal)*100).toFixed(1) : '0.0'}%</td>
+      <td style="color:var(--text3)">-</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">Nenhum fornecedor encontrado</td></tr>`;
 }
 
 function switchTab(id, btn){
