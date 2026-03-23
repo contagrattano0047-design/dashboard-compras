@@ -1570,6 +1570,344 @@ function renderFornTable(){
     </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">Nenhum fornecedor encontrado</td></tr>`;
 }
 
+const NF_KEY_CANDIDATES = [
+  'NF','N.F.','N F','NF-e','NFe','NFe Numero','Numero NF','Numero da NF',
+  'Número NF','Número da NF','Nro NF','Nr NF','Nº NF','N° NF',
+  'Nota Fiscal','Nota','Documento','Doc','Chave NF','Chave de Acesso'
+];
+
+function normalizeFieldKey(value){
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g,'');
+}
+
+function pickField(row, candidates){
+  for(const key of candidates){
+    const value = row[key];
+    if(value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  const normalizedCandidates = new Set(candidates.map(normalizeFieldKey));
+  for(const [key, value] of Object.entries(row)){
+    if(!normalizedCandidates.has(normalizeFieldKey(key))) continue;
+    if(value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return null;
+}
+
+function getFornecedorSeries(){
+  const current = Array.isArray(D.top_fornecedores) ? D.top_fornecedores : [];
+  const fallback = Array.isArray(DEFAULT.top_fornecedores) ? DEFAULT.top_fornecedores : [];
+  const source = current.length ? current : fallback;
+  return source.filter(item => item && item.nome && Number.isFinite(+item.valor));
+}
+
+function resolveEntregaStatus(statuses){
+  const clean = [...new Set(statuses.filter(Boolean))];
+  if(!clean.length) return '';
+  if(clean.includes('Atrasado')) return 'Atrasado';
+  if(clean.includes('Entregue antes do prazo')) return 'Entregue antes do prazo';
+  if(clean.includes('Dentro do prazo')) return 'Dentro do prazo';
+  return clean[0];
+}
+
+DEFAULT.kpis.pmp_medio = 0;
+if(D && D.kpis) D.kpis.pmp_medio = 0;
+
+renderKPIs = function(){
+  const k = {...D.kpis, pmp_medio: 0};
+  const items = [
+    {cls:'gold',icon:'PC',label:'Total de Pedidos (PCs)',val:fmtN(k.total_pedidos),sub:'Marck + Grattano'},
+    {cls:'red',icon:'PD',label:'Pendentes',val:k.pedidos_pendentes,sub:`${fmtR(k.valor_pendente)} em aberto`,danger:true},
+    {cls:'orange',icon:'AB',label:'Itens em Aberto',val:k.pedidos_em_aberto,sub:`${fmtR(k.valor_em_aberto)} em aberto`},
+    {cls:'teal',icon:'OK',label:'Pedidos Recebidos',val:fmtN(k.pedidos_recebidos),sub:'PCs unicos com status Recebido'},
+    {cls:'blue',icon:'LT',label:'Lead Time Mediana',val:`${k.lead_time_median}d`,sub:`${k.lead_time_mean}d media`},
+    {cls:'purple',icon:'PMP',label:'PMP Medio',val:'0d',sub:'Nao calculado'},
+  ];
+  document.getElementById('kpiGrid').innerHTML = items.map(it=>`
+    <div class="kpi ${it.cls}">
+      <div class="kpi-icon">${it.icon}</div>
+      <div class="kpi-label">${it.label}</div>
+      <div class="kpi-value${it.danger?' danger':''}">${it.val}</div>
+      <div class="kpi-sub">${it.sub}</div>
+    </div>`).join('');
+};
+
+renderTopForn = function(){
+  const forn = getFornecedorSeries();
+  if(!forn.length){
+    document.getElementById('topFornChart').innerHTML = `<div style="padding:12px 0;color:var(--text3)">Sem dados de fornecedores.</div>`;
+    return;
+  }
+  const max = Math.max(...forn.map(item => +item.valor), 1);
+  const colors = ['var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--purple)','var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--red)'];
+  document.getElementById('topFornChart').innerHTML = forn.map((item,index)=>`
+    <div class="bar-row">
+      <div class="bar-name">${item.nome}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${((+item.valor/max)*100).toFixed(1)}%;background:${colors[index%colors.length]}"></div></div>
+      <div class="bar-num">${fmtR(+item.valor)}</div>
+    </div>`).join('');
+};
+
+renderFornTable = function(){
+  const q = (document.getElementById('fornSearch')?.value || '').toLowerCase();
+  const forn = getFornecedorSeries().filter(item => !q || item.nome.toLowerCase().includes(q));
+  const grandTotal = forn.reduce((acc,item)=>acc + (+item.valor || 0),0);
+  document.getElementById('fornTbody').innerHTML = forn.map(item=>`
+    <tr>
+      <td class="bold">${item.nome}</td>
+      <td class="num">-</td>
+      <td class="num bold">${fmtFull(+item.valor)}</td>
+      <td class="num">${grandTotal ? ((+item.valor/grandTotal)*100).toFixed(1) : '0.0'}%</td>
+      <td style="color:var(--text3)">-</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">Nenhum fornecedor encontrado</td></tr>`;
+};
+
+renderFornConcentracao = function(){
+  killChart('chartFornConcentracao');
+  const forn = getFornecedorSeries();
+  if(!forn.length) return;
+  const total = forn.reduce((acc,item)=>acc + (+item.valor || 0),0);
+  const labels = [...forn.map(item=>item.nome), 'Outros'];
+  const vals = [...forn.map(item=>+item.valor), total*0.15];
+  const cols = ['#4f8ef7','#3ecfb8','#e8b84b','#f0884a','#a78bfa','#f25c6e','#4fd18a','#7ab3ff','#8ae6b4','#f5d070','#9ba3ba'];
+  charts.chartFornConcentracao = new Chart(document.getElementById('chartFornConcentracao'),{
+    type:'polarArea',
+    data:{labels,datasets:[{data:vals,backgroundColor:cols.map(c=>c+'aa'),borderColor:cols,borderWidth:1}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'right',labels:{font:{size:9},color:'var(--text2)',boxWidth:10}}},scales:{r:{grid:{color:'rgba(255,255,255,.06)'},ticks:{display:false}}}}
+  });
+};
+
+renderPendTable = function(){
+  const q = (document.getElementById('pendSearch')?.value || '').toLowerCase();
+  const sf = document.getElementById('pendStatusFilter')?.value || '';
+  const items = D.pendentes.filter(item=>{
+    if(_pendEmp !== 'all' && item.empresa !== _pendEmp) return false;
+    if(sf && item.status_pc !== sf) return false;
+    if(q){
+      const hay = `${item.pc} ${item.produto} ${item.desc} ${item.fornecedor}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('pendTbody').innerHTML = items.map(item=>{
+    const days = daysFrom(item.prev_rec);
+    return`<tr>
+      <td class="mono bold">${item.pc}</td>
+      <td class="mono">${item.produto}</td>
+      <td class="bold" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.desc}</td>
+      <td>${item.fornecedor}</td>
+      <td class="mono">${item.data_pc||'-'}</td>
+      <td class="mono">${item.prev_rec||'-'}</td>
+      <td>${daysBadge(days)}</td>
+      <td class="num">${fmtN(item.qtd)}</td>
+      <td class="num bold">${fmtR(item.valor)}</td>
+      <td><span class="badge ${item.empresa==='Marck'?'badge-faturado':'badge-partial'}">${item.empresa}</span></td>
+      <td>${statusBadge(item.status_pc)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text3)">Nenhum resultado</td></tr>`;
+};
+
+parseAndRender = function(wb){
+  try{
+    const ws_pc = wb.Sheets['Pedidos de Compra'];
+    const ws_nf = wb.Sheets['NF de Recebimentos'];
+    if(!ws_pc){ renderAll(); return; }
+
+    const pc_rows = XLSX.utils.sheet_to_json(ws_pc, {defval:null});
+    const nf_rows = ws_nf ? XLSX.utils.sheet_to_json(ws_nf, {defval:null}) : [];
+    const fixKey = row=>{ const next={}; for(const key in row) next[key.trim()] = row[key]; return next; };
+    const pc = pc_rows.map(fixKey);
+    const nf = nf_rows.map(fixKey);
+
+    const pedidosMap = new Map();
+    pc.forEach(row=>{
+      const pedido = String(row['PC'] || '').trim();
+      if(!pedido) return;
+      if(!pedidosMap.has(pedido)){
+        pedidosMap.set(pedido,{
+          pc: pedido,
+          rows: [],
+          statuses: new Set(),
+          empresa: String(row['Empresa'] || ''),
+          valor_pendente: 0,
+          valor_aberto: 0,
+        });
+      }
+      const pedidoItem = pedidosMap.get(pedido);
+      const status = String(row['Status PC'] || '').trim();
+      const valor = +row['Custo Total'] || 0;
+      pedidoItem.rows.push(row);
+      if(status) pedidoItem.statuses.add(status);
+      if(!pedidoItem.empresa && row['Empresa']) pedidoItem.empresa = String(row['Empresa'] || '');
+      if(status === 'Pendente') pedidoItem.valor_pendente += valor;
+      if(OPEN_STATUS_SET.has(status)) pedidoItem.valor_aberto += valor;
+    });
+
+    const pedidos = [...pedidosMap.values()].map(item=>({
+      ...item,
+      status_pc: resolvePedidoStatus([...item.statuses]),
+    }));
+
+    const spc = {};
+    pedidos.forEach(item=>{
+      if(item.status_pc) spc[item.status_pc] = (spc[item.status_pc] || 0) + 1;
+    });
+
+    const pendentes = pedidos.filter(item=>OPEN_STATUS_SET.has(item.status_pc));
+    const apenas_pend = pedidos.filter(item=>item.status_pc === 'Pendente');
+    const valor_pend = pendentes.reduce((acc,item)=>acc + item.valor_aberto,0);
+
+    const monthly = {};
+    pc.forEach(row=>{
+      const d = row['Data PC'] ? new Date(row['Data PC']) : null;
+      if(!d || isNaN(d)) return;
+      const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      if(!monthly[key]) monthly[key] = {qtd:new Set(), valor:0};
+      monthly[key].qtd.add(row['PC']);
+      monthly[key].valor += +row['Custo Total'] || 0;
+    });
+    const monthly_final = {};
+    Object.keys(monthly).sort().slice(-15).forEach(key=>{
+      monthly_final[key] = {qtd:monthly[key].qtd.size, valor:Math.round(monthly[key].valor)};
+    });
+
+    const monthly_rec = {};
+    nf.forEach(row=>{
+      const d = row['DT. PC'] ? new Date(row['DT. PC']) : null;
+      if(!d || isNaN(d)) return;
+      const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      if(!monthly_rec[key]) monthly_rec[key] = {qtd:0, valor:0, leads:[]};
+      monthly_rec[key].qtd++;
+      monthly_rec[key].valor += +row['Custo Total'] || 0;
+      const rec = row['Dt.Rec'] ? new Date(row['Dt.Rec']) : null;
+      if(rec && !isNaN(rec)) monthly_rec[key].leads.push((rec-d)/864e5);
+    });
+    const monthly_rec_final = {};
+    Object.keys(monthly_rec).sort().slice(-15).forEach(key=>{
+      const leads = monthly_rec[key].leads.slice().sort((a,b)=>a-b);
+      const med = leads.length ? leads[Math.floor(leads.length/2)] : 0;
+      monthly_rec_final[key] = {qtd:monthly_rec[key].qtd, valor:Math.round(monthly_rec[key].valor), lead:Math.round(med)};
+    });
+
+    const nfMap = new Map();
+    nf.forEach((row,index)=>{
+      const rawKey = pickField(row, NF_KEY_CANDIDATES);
+      const docKey = rawKey !== null ? `nf:${String(rawKey).trim()}` : `row:${index}`;
+      if(!nfMap.has(docKey)){
+        nfMap.set(docKey,{
+          empresa: String(pickField(row,['Empresa']) || ''),
+          statuses: new Set(),
+        });
+      }
+      const doc = nfMap.get(docKey);
+      const status = String(pickField(row,['Status Entrega']) || '').trim();
+      const empresa = String(pickField(row,['Empresa']) || '').trim();
+      if(status) doc.statuses.add(status);
+      if(!doc.empresa && empresa) doc.empresa = empresa;
+    });
+
+    const pont = {}, pont_m = {}, pont_g = {};
+    [...nfMap.values()].forEach(doc=>{
+      const status = resolveEntregaStatus([...doc.statuses]);
+      const empresa = doc.empresa;
+      if(status) pont[status] = (pont[status] || 0) + 1;
+      if(status && empresa === 'Marck') pont_m[status] = (pont_m[status] || 0) + 1;
+      if(status && empresa === 'Grattano') pont_g[status] = (pont_g[status] || 0) + 1;
+    });
+
+    const forn_val = {};
+    pc.forEach(row=>{
+      const fornecedor = String(pickField(row,['Fornecedor','Nome Fornecedor','Fornecedor Nome']) || '').trim();
+      if(!fornecedor) return;
+      forn_val[fornecedor] = (forn_val[fornecedor] || 0) + (+row['Custo Total'] || 0);
+    });
+    const top_forn = Object.entries(forn_val)
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,10)
+      .map(([nome, valor])=>({nome, valor:Math.round(valor)}));
+
+    const pend_detail = pc
+      .filter(row=>OPEN_STATUS_SET.has(String(row['Status PC'] || '').trim()))
+      .sort((a,b)=>(+b['Custo Total'] || 0) - (+a['Custo Total'] || 0))
+      .map(row=>({
+        pc:String(row['PC'] || ''),
+        produto:String(row['Prod.Entr'] || ''),
+        desc:String(row['Desc. Resumida'] || '').slice(0,55),
+        fornecedor:String(pickField(row,['Fornecedor','Nome Fornecedor','Fornecedor Nome']) || '').slice(0,30),
+        data_pc: row['Data PC'] ? new Date(row['Data PC']).toISOString().slice(0,10) : '',
+        prev_rec: row['Prev. Rec.'] ? new Date(row['Prev. Rec.']).toISOString().slice(0,10) : '',
+        qtd:+row['Qtd.'] || 0,
+        valor:+row['Custo Total'] || 0,
+        empresa:String(row['Empresa'] || ''),
+        status_pc:String(row['Status PC'] || ''),
+        status:String(row['Status'] || ''),
+      }));
+
+    const emp_ped = {Marck:new Set(), Grattano:new Set()};
+    const emp_val = {Marck:0, Grattano:0};
+    pc.forEach(row=>{
+      const empresa = row['Empresa'];
+      if(!empresa) return;
+      emp_ped[empresa]?.add(row['PC']);
+      emp_val[empresa] = (emp_val[empresa] || 0) + (+row['Custo Total'] || 0);
+    });
+    const empresa_status = {Marck:{}, Grattano:{}};
+    pedidos.forEach(item=>{
+      if(!empresa_status[item.empresa] || !item.status_pc) return;
+      empresa_status[item.empresa][item.status_pc] = (empresa_status[item.empresa][item.status_pc] || 0) + 1;
+    });
+
+    const leads = nf.map(row=>{
+      const d = row['DT. PC'] ? new Date(row['DT. PC']) : null;
+      const rec = row['Dt.Rec'] ? new Date(row['Dt.Rec']) : null;
+      return (d && rec && !isNaN(d) && !isNaN(rec)) ? (rec-d)/864e5 : null;
+    }).filter(value=>value !== null && value >= 0 && value < 500);
+    leads.sort((a,b)=>a-b);
+    const lead_med = leads.length ? leads[Math.floor(leads.length/2)] : 16;
+    const lead_mean = leads.length ? leads.reduce((acc,value)=>acc + value,0)/leads.length : 23;
+
+    D = {
+      ...D,
+      kpis:{
+        total_pedidos: pedidos.length,
+        pedidos_pendentes: apenas_pend.length,
+        valor_pendente: Math.round(apenas_pend.reduce((acc,item)=>acc + item.valor_pendente,0)*100)/100,
+        pedidos_em_aberto: pendentes.length,
+        valor_em_aberto: Math.round(valor_pend*100)/100,
+        pedidos_recebidos: spc['Recebido'] || 0,
+        lead_time_median: Math.round(lead_med),
+        lead_time_mean: Math.round(lead_mean),
+        pmp_medio: 0,
+        atrasados_pct: pont['Atrasado'] ? +(pont['Atrasado']/(Object.values(pont).reduce((acc,value)=>acc + value,0))*100).toFixed(1) : 0,
+        total_valor: Math.round(pc.reduce((acc,row)=>acc + (+row['Custo Total'] || 0),0)),
+        marck_valor: Math.round(emp_val.Marck || 0),
+        grattano_valor: Math.round(emp_val.Grattano || 0),
+        marck_pedidos: emp_ped.Marck?.size || 0,
+        grattano_pedidos: emp_ped.Grattano?.size || 0,
+      },
+      empresa_status,
+      status_pc: spc,
+      pontualidade: Object.keys(pont).length ? pont : D.pontualidade,
+      pontualidade_marck: Object.keys(pont_m).length ? pont_m : D.pontualidade_marck,
+      pontualidade_grattano: Object.keys(pont_g).length ? pont_g : D.pontualidade_grattano,
+      monthly: monthly_final,
+      monthly_rec: monthly_rec_final,
+      top_fornecedores: top_forn.length ? top_forn : getFornecedorSeries(),
+      pendentes: pend_detail,
+    };
+
+    renderAll();
+  }catch(e){
+    console.error('parseAndRender:',e);
+    D.kpis.pmp_medio = 0;
+    renderAll();
+  }
+};
+
 function switchTab(id, btn){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
