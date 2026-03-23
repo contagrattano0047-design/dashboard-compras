@@ -415,7 +415,7 @@ td.bold{font-weight:700;color:var(--text)}
     <div class="card">
       <div class="card-header"><div class="card-title">Lead Time Médio</div></div>
       <div style="text-align:center;padding:16px 0">
-        <div style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--blue)">16</div>
+        <div id="recLeadMedian" style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--blue)">16</div>
         <div style="font-size:12px;color:var(--text3);margin-top:4px">dias (mediana)</div>
         <div style="font-size:11px;color:var(--text3);margin-top:2px">23 dias (média)</div>
       </div>
@@ -423,7 +423,7 @@ td.bold{font-weight:700;color:var(--text)}
     <div class="card">
       <div class="card-header"><div class="card-title">Atrasados</div></div>
       <div style="text-align:center;padding:16px 0">
-        <div style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--red)">594</div>
+        <div id="recAtrasados" style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--red)">594</div>
         <div style="font-size:12px;color:var(--text3);margin-top:4px">59,3% dos recebimentos</div>
         <div style="font-size:11px;color:var(--text3)">histórico completo</div>
       </div>
@@ -431,7 +431,7 @@ td.bold{font-weight:700;color:var(--text)}
     <div class="card">
       <div class="card-header"><div class="card-title">PMP Médio</div></div>
       <div style="text-align:center;padding:16px 0">
-        <div style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--gold)">35</div>
+        <div id="recPmp" style="font-family:var(--font-display);font-size:48px;font-weight:800;color:var(--gold)">0</div>
         <div style="font-size:12px;color:var(--text3);margin-top:4px">dias (prazo médio pag.)</div>
         <div style="font-size:11px;color:var(--text3)">mediana ponderada</div>
       </div>
@@ -470,7 +470,7 @@ td.bold{font-weight:700;color:var(--text)}
   <div class="grid-1-2" style="margin-bottom:16px">
     <div class="card">
       <div class="card-header"><div class="card-title">Top Fornecedores</div><div class="card-sub">Por valor total (Pedidos de Compra)</div></div>
-      <div id="topFornTable"></div>
+      <div id="topFornChartSup"></div>
     </div>
     <div class="card">
       <div class="card-header"><div class="card-title">Concentração de Compras</div><div class="card-sub">% do total</div></div>
@@ -1637,18 +1637,21 @@ renderKPIs = function(){
 
 renderTopForn = function(){
   const forn = getFornecedorSeries();
+  const hosts = [document.getElementById('topFornChart'), document.getElementById('topFornChartSup')].filter(Boolean);
+  if(!hosts.length) return;
   if(!forn.length){
-    document.getElementById('topFornChart').innerHTML = `<div style="padding:12px 0;color:var(--text3)">Sem dados de fornecedores.</div>`;
+    hosts.forEach(host=>{ host.innerHTML = `<div style="padding:12px 0;color:var(--text3)">Sem dados de fornecedores.</div>`; });
     return;
   }
   const max = Math.max(...forn.map(item => +item.valor), 1);
   const colors = ['var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--purple)','var(--blue)','var(--teal)','var(--gold)','var(--orange)','var(--red)'];
-  document.getElementById('topFornChart').innerHTML = forn.map((item,index)=>`
+  const html = forn.map((item,index)=>`
     <div class="bar-row">
       <div class="bar-name">${item.nome}</div>
       <div class="bar-bg"><div class="bar-fill" style="width:${((+item.valor/max)*100).toFixed(1)}%;background:${colors[index%colors.length]}"></div></div>
       <div class="bar-num">${fmtR(+item.valor)}</div>
     </div>`).join('');
+  hosts.forEach(host=>{ host.innerHTML = html; });
 };
 
 renderFornTable = function(){
@@ -1906,6 +1909,36 @@ parseAndRender = function(wb){
     D.kpis.pmp_medio = 0;
     renderAll();
   }
+};
+
+function renderRecebimentosCards(){
+  const leadMedianEl = document.getElementById('recLeadMedian');
+  const atrasadosEl = document.getElementById('recAtrasados');
+  const pmpEl = document.getElementById('recPmp');
+
+  if(leadMedianEl){
+    leadMedianEl.textContent = String(D?.kpis?.lead_time_median ?? 0);
+    const meanEl = leadMedianEl.parentElement?.children?.[2];
+    if(meanEl) meanEl.textContent = `${D?.kpis?.lead_time_mean ?? 0} dias (media)`;
+  }
+
+  if(atrasadosEl){
+    atrasadosEl.textContent = fmtN(D?.pontualidade?.Atrasado || 0);
+    const pctEl = atrasadosEl.parentElement?.children?.[1];
+    if(pctEl) pctEl.textContent = `${fmt2(D?.kpis?.atrasados_pct || 0)}% das notas fiscais`;
+  }
+
+  if(pmpEl){
+    pmpEl.textContent = '0';
+    const subEl = pmpEl.parentElement?.children?.[2];
+    if(subEl) subEl.textContent = 'nao calculado';
+  }
+}
+
+const _renderAllBase = renderAll;
+renderAll = function(){
+  _renderAllBase();
+  try{ renderRecebimentosCards(); }catch(e){ console.error('RecCards:',e); }
 };
 
 function switchTab(id, btn){
