@@ -619,7 +619,16 @@ function parseAndRender(wb){
     const today=new Date();today.setHours(0,0,0,0);
     const PEND=new Set(['Pendente','Faturado','Faturado Parcial','Recebido Parcial']);
     function bKpis(rows){const pend=rows.filter(r=>PEND.has(fs(r['Status PC'])));const ab=rows.filter(r=>fs(r['Status'])==='A Receber'&&PEND.has(fs(r['Status PC'])));const rec=rows.filter(r=>fs(r['Status PC'])==='Recebido');const pcs=a=>new Set(a.map(r=>r['PC']).filter(Boolean)).size;const sum=a=>Math.round(a.reduce((t,r)=>t+fv(r['Custo Total']),0)*100)/100;return{total_pcs:pcs(rows),total_valor:sum(rows),pend_pcs:pcs(pend),pend_valor:sum(pend),pend_itens:pend.length,aberto_pcs:pcs(ab),aberto_valor:sum(ab),rec_pcs:pcs(rec)};}
-    function bSPC(rows){const s={};rows.forEach(r=>{const k=fs(r['Status PC']);if(k)s[k]=(s[k]||0)+1;});return s;}
+    function bSPC(rows){
+      const score={Pendente:6,'Faturado Parcial':5,Faturado:4,'Recebido Parcial':3,Recebido:2,Encerrado:1};
+      const byPc={};
+      rows.forEach(r=>{
+        const pcKey=fs(r['PC']);const status=fs(r['Status PC']);
+        if(!pcKey||!status)return;
+        if(!byPc[pcKey]||(score[status]||0)>(score[byPc[pcKey]]||0))byPc[pcKey]=status;
+      });
+      const s={};Object.values(byPc).forEach(k=>{s[k]=(s[k]||0)+1;});return s;
+    }
     function bMonthly(src,dtC,numC,valC){const m={};src.forEach(r=>{const dt=new Date(r[dtC]);if(isNaN(dt))return;const k=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(!m[k])m[k]={p:new Set(),v:0};m[k].p.add(r[numC]);m[k].v+=fv(r[valC]);});const res={};Object.keys(m).sort().filter(k=>k>='2025-01').forEach(k=>{res[k]={qtd:m[k].p.size,valor:Math.round(m[k].v*100)/100};});return res;}
     function bForn(rows,n=40){const m={};rows.forEach(r=>{const nm=fs(r['Fornecedor']);if(!nm)return;if(!m[nm])m[nm]={pcs:new Set(),valor:0,pendPcs:new Set()};m[nm].pcs.add(r['PC']);m[nm].valor+=fv(r['Custo Total']);if(PEND.has(fs(r['Status PC'])))m[nm].pendPcs.add(r['PC']);});return Object.entries(m).sort((a,b)=>b[1].valor-a[1].valor).slice(0,n).map(([nome,v])=>({nome:nome.slice(0,30),pcs:v.pcs.size,valor:Math.round(v.valor*100)/100,pend:v.pendPcs.size}));}
     function bPend(rows){
@@ -665,8 +674,11 @@ function parseAndRender(wb){
     const pmps=nf.map(r=>fv(r['PMP'])).filter(x=>x>0&&x<365);
     const monRec={};nf.forEach(r=>{const dt=new Date(r['Dt.Rec']);if(isNaN(dt))return;const m=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(m<'2025-01')return;if(!monRec[m])monRec[m]={p:new Set(),v:0,l:[]};monRec[m].p.add(r['PC']);monRec[m].v+=fv(r['Custo Total']);const dp=new Date(r['DT. PC']),dr=new Date(r['Dt.Rec']);const d=Math.round((dr-dp)/864e5);if(d>0&&d<365)monRec[m].l.push(d);});
     const monthly_rec={};Object.keys(monRec).sort().forEach(m=>{const d=monRec[m];const ls=[...d.l].sort((a,b)=>a-b);monthly_rec[m]={qtd:d.p.size,valor:Math.round(d.v*100)/100,lead:ls.length?ls[Math.floor(ls.length/2)]:0};});
-    const em={};nf.forEach(r=>{const dt=new Date(r['Dt.Rec']);if(isNaN(dt))return;const m=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(m<'2025-01')return;const s=fs(r['Status Entrega']);if(!s)return;if(!em[m])em[m]={'Atrasado':0,'Entregue antes do prazo':0,'Dentro do prazo':0};if(em[m][s]!==undefined)em[m][s]++;});
-    const pont={};nf.forEach(r=>{const s=fs(r['Status Entrega']);if(s)pont[s]=(pont[s]||0)+1;});
+    const nfStatusScore={'Atrasado':3,'Dentro do prazo':2,'Entregue antes do prazo':1};
+    const nfKey=r=>fs(r['Nfe'])||fs(r['Ultima NFe'])||`${fs(r['PC'])}|${fd(r['Dt.Rec'])}|${fs(r['Fornecedor'])}|${fs(pick(r,PROD_KEYS))}`;
+    const nfGrouped={};nf.forEach(r=>{const key=nfKey(r);const s=fs(r['Status Entrega']);const dt=new Date(r['Dt.Rec']);if(!key||!s||isNaN(dt))return;const m=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(!nfGrouped[key])nfGrouped[key]={status:s,month:m};if((nfStatusScore[s]||0)>(nfStatusScore[nfGrouped[key].status]||0))nfGrouped[key].status=s;if(!nfGrouped[key].month&&m)nfGrouped[key].month=m;});
+    const em={};Object.values(nfGrouped).forEach(r=>{if(!r.month||r.month<'2025-01')return;if(!em[r.month])em[r.month]={'Atrasado':0,'Entregue antes do prazo':0,'Dentro do prazo':0};if(em[r.month][r.status]!==undefined)em[r.month][r.status]++;});
+    const pont={};Object.values(nfGrouped).forEach(r=>{if(r.status)pont[r.status]=(pont[r.status]||0)+1;});
     D=syncOpenMetrics({kpis:bKpis(pc),kpis_marck:bKpis(pc_m),kpis_grattano:bKpis(pc_g),lead_time_median:leads.length?leads[Math.floor(leads.length/2)]:0,lead_time_mean:leads.length?Math.round(leads.reduce((a,b)=>a+b,0)/leads.length):0,pmp_medio:pmps.length?Math.round(pmps.reduce((a,b)=>a+b,0)/pmps.length):0,status_pc:bSPC(pc),status_pc_marck:bSPC(pc_m),status_pc_grattano:bSPC(pc_g),pontualidade:pont,monthly:bMonthly(bc,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_marck:bMonthly(bc_m,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_grattano:bMonthly(bc_g,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_rec,entrega_por_mes:em,top_forn:bForn(pc,10),top_forn_marck:bForn(pc_m,10),top_forn_grattano:bForn(pc_g,10),pendentes:bPend(pc),pendentes_marck:bPend(pc_m),pendentes_grattano:bPend(pc_g),a_receber:bAr(pc),a_receber_marck:bAr(pc_m),a_receber_grattano:bAr(pc_g),forn_stats:bForn(pc,40),forn_stats_marck:bForn(pc_m,40),forn_stats_grattano:bForn(pc_g,40)});
     renderAll();
     document.getElementById('badgePend').textContent=D.kpis?.pend_pcs||D.pendentes?.length||'—';
