@@ -515,10 +515,11 @@ function parseAndRender(wb){
     const fv=x=>(x===null||x===undefined||isNaN(+x))?0:+x;
     const fs=x=>(x===null||x===undefined)?'':String(x).trim();
     const fd=x=>{try{const d=new Date(x);return isNaN(d)?'':d.toISOString().slice(0,10);}catch{return '';}};    
-    const pick=(row,keys)=>{for(const key of keys){const val=fs(row[key]);if(val)return val;}return '';};
     const norm=x=>fs(x).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    const pick=(row,keys)=>{for(const key of keys){const val=fs(row[key]);if(val)return val;const match=Object.keys(row||{}).find(col=>norm(col)===norm(key));if(match){const matched=fs(row[match]);if(matched)return matched;}}return '';};
     const normEmp=x=>{const v=norm(x);if(v.includes('MARCK'))return'Marck';if(v.includes('GRATTAN'))return'Grattano';return fs(x);};
-    const rowEmp=row=>normEmp(pick(row,['Empresa','EMPRESA','F_Compra[Empresa]','F_Compra.Empresa']));
+    const pcEmpMap={};bc.forEach(r=>{const pcKey=fs(pick(r,['F_Compra[cNumero]','PC']));const empKey=normEmp(pick(r,['F_Compra[Empresa]','Empresa','Empresa ']));if(pcKey&&empKey&&!pcEmpMap[pcKey])pcEmpMap[pcKey]=empKey;});
+    const rowEmp=row=>{const direct=normEmp(pick(row,['Empresa','Empresa ','EMPRESA','EMPRESA ','F_Compra[Empresa]','F_Compra.Empresa']));if(direct==='Marck'||direct==='Grattano')return direct;const pcKey=fs(pick(row,['PC','F_Compra[cNumero]']));return pcEmpMap[pcKey]||direct;};
     const PROD_KEYS=['Produto','Produto/Serviço','Produto / Serviço','Cod. Produto','Cód. Produto','Cod Produto','Código Produto','Item','Cod_Item'];
     const today=new Date();today.setHours(0,0,0,0);
     const PEND=new Set(['Pendente','Faturado','Faturado Parcial']);
