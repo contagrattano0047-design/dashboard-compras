@@ -550,11 +550,9 @@ const MSAL_CONFIG = {
   },
   cache:{cacheLocation:'sessionStorage'}
 };
-const SP_HOST = 'https://grattanomarck.sharepoint.com';
-const SP_SITE = '/sites/SistemadeArquivosGrattanoMarck';
-const FILE_ID = '37f0fe5d-28e9-4fc4-829d-ad8b6b20dede';
-const SCOPES  = ['https://graph.microsoft.com/Sites.Read.All','https://graph.microsoft.com/Files.Read.All'];
-
+// ── SharePoint connection ──
+const SHARE_URL = 'https://grattanomarck.sharepoint.com/:x:/s/SistemadeArquivosGrattanoMarck/IQBd_vA36SjET4KdrYtrIN7eAQ0Y2Zv2XEf71WO9P9_KlLE?e=7Qp8uD';
+const SCOPES    = ['https://graph.microsoft.com/Files.ReadWrite.All','https://graph.microsoft.com/Sites.ReadWrite.All'];
 let msalApp = null;
 let _token  = null;
 
@@ -564,16 +562,28 @@ async function initMsal(){
   return msalApp;
 }
 
+async function getToken(){
+  const app  = await initMsal();
+  const resp = await app.handleRedirectPromise();
+  if(resp?.accessToken) return resp.accessToken;
+  const accs = app.getAllAccounts();
+  if(accs.length){
+    try{ return (await app.acquireTokenSilent({scopes:SCOPES,account:accs[0]})).accessToken; }catch(e){}
+  }
+  return null;
+}
+
 async function msalLogin(){
   try{
     const app = await initMsal();
-    const resp = await app.handleRedirectPromise();
-    if(resp?.accessToken){ _token=resp.accessToken; await loadSharePoint(); return; }
+    await app.handleRedirectPromise();
     const accs = app.getAllAccounts();
     if(accs.length){
       try{
-        const sr = await app.acquireTokenSilent({scopes:SCOPES, account:accs[0]});
-        _token=sr.accessToken; await loadSharePoint(); return;
+        const sr = await app.acquireTokenSilent({scopes:SCOPES,account:accs[0]});
+        _token = sr.accessToken;
+        await loadSharePoint();
+        return;
       }catch(e){}
     }
     await app.loginRedirect({scopes:SCOPES});
@@ -582,30 +592,46 @@ async function msalLogin(){
 
 async function loadSharePoint(){
   document.getElementById('loginOverlay').classList.add('hidden');
-  setLoading(true,'Buscando arquivo…');
+  setLoading(true,'Obtendo token…');
   try{
-    const app = await initMsal();
-    const accs = app.getAllAccounts();
-    if(!accs.length){ setLoading(false); return; }
-    const tr = await app.acquireTokenSilent({scopes:SCOPES, account:accs[0]});
-    _token = tr.accessToken;
+    _token = await getToken();
+    if(!_token){ setLoading(false); document.getElementById('loginOverlay').classList.remove('hidden'); return; }
+
+    // Encode the share URL exactly like Fluxo de Caixa (browser btoa)
+    const encodedShare = 'u!'+btoa(SHARE_URL).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
+    const headers = {Authorization:'Bearer '+_token};
+    const graphBase = 'https://graph.microsoft.com/v1.0';
+
+    setLoading(true,'Buscando arquivo no SharePoint…');
+    const metaResp = await fetch(graphBase+'/shares/'+encodedShare+'/driveItem',{headers});
+    if(!metaResp.ok){
+      const err = await metaResp.json().catch(()=>({}));
+      throw new Error('Sem acesso: '+(err.error?.message||metaResp.status));
+    }
+    const meta = await metaResp.json();
 
     setLoading(true,'Baixando planilha…');
-    const url = `https://graph.microsoft.com/v1.0/sites/grattanomarck.sharepoint.com:/sites/SistemadeArquivosGrattanoMarck:/drive/items/${FILE_ID}/content`;
-    const r = await fetch(url, {headers:{Authorization:`Bearer ${_token}`}});
-    if(!r.ok) throw new Error('HTTP '+r.status);
+    let dlResp;
+    if(meta['@microsoft.graph.downloadUrl'])
+      dlResp = await fetch(meta['@microsoft.graph.downloadUrl']);
+    else
+      dlResp = await fetch(graphBase+'/shares/'+encodedShare+'/driveItem/content',{headers});
+    if(!dlResp.ok) throw new Error('Erro ao baixar: '+dlResp.status);
 
     setLoading(true,'Processando dados…');
-    const buf = await r.arrayBuffer();
-    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const buf = await dlResp.arrayBuffer();
+    const wb  = XLSX.read(buf,{type:'array',cellDates:true});
     parseAndRender(wb);
-    setStatus('live','Dados ao vivo — SharePoint');
+    setStatus('live','Conectado: '+meta.name+' ✓');
   }catch(e){
-    console.error(e);
-    setStatus('warn','Erro — usando dados locais');
+    console.error('loadSharePoint:',e);
+    setStatus('warn','Erro: '+e.message.slice(0,70));
     renderAll();
   }finally{ setLoading(false); }
 }
+
+function refreshData(){ _token ? loadSharePoint() : msalLogin(); }
+
 
 function setLoading(on, msg=''){
   const el = document.getElementById('loadingOverlay');
@@ -1240,18 +1266,27 @@ function refreshData(){ loadSharePoint(); }
 document.addEventListener('DOMContentLoaded', async()=>{
   Chart.defaults.font.family = 'Nunito Sans';
   D = DEFAULT;
-  renderAll();
+  renderAll(); // render preloaded data immediately — visible before login
 
+  // Silent MSAL check — no overlay, data stays visible
   try{
     const app = await initMsal();
     const resp = await app.handleRedirectPromise();
-    if(resp?.accessToken){ _token=resp.accessToken; await loadSharePoint(); return; }
+    if(resp?.accessToken){
+      _token = resp.accessToken;
+      await loadSharePoint();
+      return;
+    }
     const accs = app.getAllAccounts();
-    if(accs.length>0){ await loadSharePoint(); return; }
-  }catch(e){ console.warn('MSAL:',e); }
+    if(accs.length > 0){
+      await loadSharePoint();
+      return;
+    }
+  }catch(e){ console.warn('MSAL silent check:', e); }
 
+  // No session found — show login overlay over the preloaded data
   document.getElementById('loginOverlay').classList.remove('hidden');
-  setStatus('none','Aguardando login…');
+  setStatus('none','Dados pré-carregados · Faça login para dados ao vivo');
 });
 </script>
 </body>
