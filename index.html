@@ -277,7 +277,7 @@ async function loadSharePoint(){
   setLoading(true,'Obtendo token…');
   try{
     _token=await getToken();
-    if(!_token){setLoading(false);document.getElementById('loginOverlay').classList.remove('hidden');return;}
+    if(!_token){D=DEFAULT;renderAll();setStatus('none','Dados pré-carregados');setLoading(false);document.getElementById('loginOverlay').classList.remove('hidden');return;}
     const encodedShare='u!'+btoa(SHARE_URL).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
     const headers={Authorization:'Bearer '+_token};
     const graphBase='https://graph.microsoft.com/v1.0';
@@ -293,9 +293,10 @@ async function loadSharePoint(){
     setLoading(true,'Processando…');
     const buf=await dlResp.arrayBuffer();
     const wb=XLSX.read(buf,{type:'array',cellDates:true});
-    parseAndRender(wb);
+    const parsed=parseAndRender(wb);
+    if(!parsed)throw new Error('Conectado ao SharePoint, mas a planilha não pôde ser interpretada.');
     setStatus('live','Conectado: '+meta.name);
-  }catch(e){console.error(e);setStatus('warn','Erro: '+e.message.slice(0,60));renderAll();}
+  }catch(e){console.error(e);D=DEFAULT;setStatus('warn','Erro: '+e.message.slice(0,60));renderAll();}
   finally{setLoading(false);}
 }
 function refreshData(){_token?loadSharePoint():msalLogin();}
@@ -507,13 +508,15 @@ function renderArTable(){
 function parseAndRender(wb){
   try{
     const ws_pc=wb.Sheets['Pedidos de Compra'];const ws_nf=wb.Sheets['NF de Recebimentos'];const ws_bc=wb.Sheets['Base - Compras'];
-    if(!ws_pc){renderAll();return;}
+    if(!ws_pc)return false;
     const pc=XLSX.utils.sheet_to_json(ws_pc,{defval:null});
     const nf=ws_nf?XLSX.utils.sheet_to_json(ws_nf,{defval:null}):[];
     const bc=ws_bc?XLSX.utils.sheet_to_json(ws_bc,{defval:null}):[];
     const fv=x=>(x===null||x===undefined||isNaN(+x))?0:+x;
     const fs=x=>(x===null||x===undefined)?'':String(x).trim();
-    const fd=x=>{try{const d=new Date(x);return isNaN(d)?'':d.toISOString().slice(0,10);}catch{return '';}};
+    const fd=x=>{try{const d=new Date(x);return isNaN(d)?'':d.toISOString().slice(0,10);}catch{return '';}};    
+    const pick=(row,keys)=>{for(const key of keys){const val=fs(row[key]);if(val)return val;}return '';};
+    const PROD_KEYS=['Produto','Produto/Serviço','Produto / Serviço','Cod. Produto','Cód. Produto','Cod Produto','Código Produto','Item','Cod_Item'];
     const today=new Date();today.setHours(0,0,0,0);
     const PEND=new Set(['Pendente','Faturado','Faturado Parcial']);
     function bKpis(rows){const pend=rows.filter(r=>PEND.has(fs(r['Status PC'])));const ab=rows.filter(r=>fs(r['Status'])==='A Receber');const rec=rows.filter(r=>fs(r['Status PC'])==='Recebido');const pcs=a=>new Set(a.map(r=>r['PC']).filter(Boolean)).size;const sum=a=>Math.round(a.reduce((t,r)=>t+fv(r['Custo Total']),0)*100)/100;return{total_pcs:pcs(rows),total_valor:sum(rows),pend_pcs:pcs(pend),pend_valor:sum(pend),pend_itens:pend.length,aberto_pcs:pcs(ab),aberto_valor:sum(ab),rec_pcs:pcs(rec)};}
@@ -525,7 +528,7 @@ function parseAndRender(wb){
   const byPc={};
   pend.forEach(r=>{
     const pc=String(r['PC']||'');
-    if(!byPc[pc]){byPc[pc]={pc,desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,qtd_rec:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
+    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,qtd_rec:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
     byPc[pc].qtd+=Math.round(fv(r['Qtd.']));
     byPc[pc].qtd_rec+=Math.round(fv(r['Qtd Rec']));
     byPc[pc].valor+=fv(r['Custo Total']);
@@ -541,7 +544,7 @@ function parseAndRender(wb){
   const byPc={};
   ar.forEach(r=>{
     const pc=String(r['PC']||'');
-    if(!byPc[pc]){byPc[pc]={pc,desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
+    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
     byPc[pc].qtd+=Math.round(fv(r['Qtd.']));
     byPc[pc].valor+=fv(r['Custo Total']);
     byPc[pc].n_itens++;
@@ -562,7 +565,8 @@ function parseAndRender(wb){
     D={kpis:bKpis(pc),kpis_marck:bKpis(pc_m),kpis_grattano:bKpis(pc_g),lead_time_median:leads.length?leads[Math.floor(leads.length/2)]:0,lead_time_mean:leads.length?Math.round(leads.reduce((a,b)=>a+b,0)/leads.length):0,pmp_medio:pmps.length?Math.round(pmps.reduce((a,b)=>a+b,0)/pmps.length):0,status_pc:bSPC(pc),status_pc_marck:bSPC(pc_m),status_pc_grattano:bSPC(pc_g),pontualidade:pont,monthly:bMonthly(bc,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_marck:bMonthly(bc_m,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_grattano:bMonthly(bc_g,'F_Compra[dIncData]','F_Compra[cNumero]','F_Compra[nValTot]'),monthly_rec,entrega_por_mes:em,top_forn:bForn(pc,10),top_forn_marck:bForn(pc_m,10),top_forn_grattano:bForn(pc_g,10),pendentes:bPend(pc),pendentes_marck:bPend(pc_m),pendentes_grattano:bPend(pc_g),a_receber:bAr(pc),a_receber_marck:bAr(pc_m),a_receber_grattano:bAr(pc_g),forn_stats:bForn(pc,40),forn_stats_marck:bForn(pc_m,40),forn_stats_grattano:bForn(pc_g,40)};
     renderAll();
     document.getElementById('badgePend').textContent=D.kpis?.pend_pcs||D.pendentes?.length||'—';
-  }catch(e){console.error('parseAndRender:',e);renderAll();}
+    return true;
+  }catch(e){console.error('parseAndRender:',e);return false;}
 }
 
 document.addEventListener('DOMContentLoaded',async()=>{
