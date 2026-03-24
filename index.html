@@ -189,7 +189,7 @@ select.search-box{flex:0 0 auto;min-width:140px;max-width:180px}
     <input type="text" class="search-box" id="pendSearch" placeholder="Buscar PC, produto, fornecedor…" oninput="renderPendTable()">
     <select class="search-box" id="pendStatusFilter" onchange="renderPendTable()">
       <option value="">Todos os status</option>
-      <option>Pendente</option><option>Faturado</option><option>Faturado Parcial</option>
+      <option>Pendente</option><option>Faturado</option><option>Faturado Parcial</option><option>Recebido Parcial</option>
     </select>
   </div>
   <div class="tbl-wrap"><table>
@@ -443,7 +443,7 @@ function renderEmpresaStats(){
 function renderPendStatusGrid(){
   const pend=getPend(); // already 1 row per PC
   const byStatus={};pend.forEach(r=>{if(!byStatus[r.status_pc])byStatus[r.status_pc]={cnt:0,val:0};byStatus[r.status_pc].cnt++;byStatus[r.status_pc].val+=r.valor;});
-  const items=[{label:'Pendente',col:'var(--red)'},{label:'Faturado',col:'var(--blue)'},{label:'Faturado Parcial',col:'var(--orange)'}];
+  const items=[{label:'Pendente',col:'var(--red)'},{label:'Faturado',col:'var(--blue)'},{label:'Faturado Parcial',col:'var(--orange)'},{label:'Recebido Parcial',col:'var(--gold)'}];
   document.getElementById('pendStatusGrid').innerHTML=items.map(it=>{const d=byStatus[it.label]||{pcs:new Set(),val:0};return`<div class="stat-block"><div class="stat-block-num" style="color:${it.col}">${d.cnt||0}</div><div class="stat-block-label">${it.label}</div><div style="font-size:11px;color:var(--gray-400);margin-top:4px">${fmtR(d.val)}</div></div>`;}).join('');
 }
 
@@ -522,7 +522,7 @@ function parseAndRender(wb){
     const rowEmp=row=>{const direct=normEmp(pick(row,['Empresa','Empresa ','EMPRESA','EMPRESA ','F_Compra[Empresa]','F_Compra.Empresa']));if(direct==='Marck'||direct==='Grattano')return direct;const pcKey=fs(pick(row,['PC','F_Compra[cNumero]']));return pcEmpMap[pcKey]||direct;};
     const PROD_KEYS=['Produto','Produto/Serviço','Produto / Serviço','Cod. Produto','Cód. Produto','Cod Produto','Código Produto','Item','Cod_Item'];
     const today=new Date();today.setHours(0,0,0,0);
-    const PEND=new Set(['Pendente','Faturado','Faturado Parcial']);
+    const PEND=new Set(['Pendente','Faturado','Faturado Parcial','Recebido Parcial']);
     function bKpis(rows){const pend=rows.filter(r=>PEND.has(fs(r['Status PC'])));const ab=rows.filter(r=>fs(r['Status'])==='A Receber');const rec=rows.filter(r=>fs(r['Status PC'])==='Recebido');const pcs=a=>new Set(a.map(r=>r['PC']).filter(Boolean)).size;const sum=a=>Math.round(a.reduce((t,r)=>t+fv(r['Custo Total']),0)*100)/100;return{total_pcs:pcs(rows),total_valor:sum(rows),pend_pcs:pcs(pend),pend_valor:sum(pend),pend_itens:pend.length,aberto_pcs:pcs(ab),aberto_valor:sum(ab),rec_pcs:pcs(rec)};}
     function bSPC(rows){const s={};rows.forEach(r=>{const k=fs(r['Status PC']);if(k)s[k]=(s[k]||0)+1;});return s;}
     function bMonthly(src,dtC,numC,valC){const m={};src.forEach(r=>{const dt=new Date(r[dtC]);if(isNaN(dt))return;const k=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(!m[k])m[k]={p:new Set(),v:0};m[k].p.add(r[numC]);m[k].v+=fv(r[valC]);});const res={};Object.keys(m).sort().filter(k=>k>='2025-01').forEach(k=>{res[k]={qtd:m[k].p.size,valor:Math.round(m[k].v*100)/100};});return res;}
