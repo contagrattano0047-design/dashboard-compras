@@ -318,7 +318,7 @@ function fmtN(v){return Number(v).toLocaleString('pt-BR');}
 function monLabel(m){const[y,mo]=m.split('-');return MN[+mo-1]+'/'+y.slice(2);}
 function killChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function statusBadge(s){const map={Pendente:'badge-pending',Faturado:'badge-faturado','Faturado Parcial':'badge-partial','Recebido Parcial':'badge-partial',Recebido:'badge-received',Encerrado:'badge-closed'};return`<span class="badge ${map[s]||'badge-closed'}">${s}</span>`;}
-function empBadge(e){return`<span class="badge ${e==='Marck'?'badge-marck':'badge-grattano'}">${e}</span>`;}
+function empBadge(e){const c=e==='Marck'?'badge-marck':e==='Grattano'?'badge-grattano':'badge-closed';return`<span class="badge ${c}">${e||'â€”'}</span>`;}
 function daysBadge(d){if(d===null||d===undefined)return'—';if(d<=0)return`<span class="days-badge days-ok">No prazo</span>`;if(d<=7)return`<span class="days-badge days-warn">${d}d atrasado</span>`;return`<span class="days-badge days-late">${d}d atrasado</span>`;}
 function getKpis(){return _emp==='all'?D.kpis:_emp==='Marck'?D.kpis_marck:D.kpis_grattano;}
 function getStatusPc(){return _emp==='all'?D.status_pc:_emp==='Marck'?D.status_pc_marck:D.status_pc_grattano;}
@@ -516,6 +516,9 @@ function parseAndRender(wb){
     const fs=x=>(x===null||x===undefined)?'':String(x).trim();
     const fd=x=>{try{const d=new Date(x);return isNaN(d)?'':d.toISOString().slice(0,10);}catch{return '';}};    
     const pick=(row,keys)=>{for(const key of keys){const val=fs(row[key]);if(val)return val;}return '';};
+    const norm=x=>fs(x).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    const normEmp=x=>{const v=norm(x);if(v.includes('MARCK'))return'Marck';if(v.includes('GRATTAN'))return'Grattano';return fs(x);};
+    const rowEmp=row=>normEmp(pick(row,['Empresa','EMPRESA','F_Compra[Empresa]','F_Compra.Empresa']));
     const PROD_KEYS=['Produto','Produto/Serviço','Produto / Serviço','Cod. Produto','Cód. Produto','Cod Produto','Código Produto','Item','Cod_Item'];
     const today=new Date();today.setHours(0,0,0,0);
     const PEND=new Set(['Pendente','Faturado','Faturado Parcial']);
@@ -528,7 +531,7 @@ function parseAndRender(wb){
   const byPc={};
   pend.forEach(r=>{
     const pc=String(r['PC']||'');
-    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,qtd_rec:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
+    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,qtd_rec:0,valor:0,empresa:rowEmp(r),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
     byPc[pc].qtd+=Math.round(fv(r['Qtd.']));
     byPc[pc].qtd_rec+=Math.round(fv(r['Qtd Rec']));
     byPc[pc].valor+=fv(r['Custo Total']);
@@ -544,7 +547,7 @@ function parseAndRender(wb){
   const byPc={};
   ar.forEach(r=>{
     const pc=String(r['PC']||'');
-    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,valor:0,empresa:fs(r['Empresa']),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
+    if(!byPc[pc]){byPc[pc]={pc,produto:pick(r,PROD_KEYS),desc:fs(r['Desc. Resumida']).slice(0,50),fornecedor:fs(r['Fornecedor']).slice(0,28),data_pc:fd(r['Data PC']),prev_rec:fd(r['Prev. Rec.']),qtd:0,valor:0,empresa:rowEmp(r),status_pc:fs(r['Status PC']),n_itens:0,dias:0};}
     byPc[pc].qtd+=Math.round(fv(r['Qtd.']));
     byPc[pc].valor+=fv(r['Custo Total']);
     byPc[pc].n_itens++;
@@ -554,8 +557,8 @@ function parseAndRender(wb){
   });
   return Object.values(byPc).map(r=>({...r,valor:Math.round(r.valor*100)/100})).sort((a,b)=>a.dias-b.dias);
 }
-    const pc_m=pc.filter(r=>fs(r['Empresa'])==='Marck');const pc_g=pc.filter(r=>fs(r['Empresa'])==='Grattano');
-    const bc_m=bc.filter(r=>fs(r['F_Compra[Empresa]'])==='Marck');const bc_g=bc.filter(r=>fs(r['F_Compra[Empresa]'])==='Grattano');
+    const pc_m=pc.filter(r=>rowEmp(r)==='Marck');const pc_g=pc.filter(r=>rowEmp(r)==='Grattano');
+    const bc_m=bc.filter(r=>rowEmp(r)==='Marck');const bc_g=bc.filter(r=>rowEmp(r)==='Grattano');
     const leads=nf.map(r=>{const dp=new Date(r['DT. PC']),dr=new Date(r['Dt.Rec']);const d=Math.round((dr-dp)/864e5);return d>0&&d<365?d:null;}).filter(x=>x!==null).sort((a,b)=>a-b);
     const pmps=nf.map(r=>fv(r['PMP'])).filter(x=>x>0&&x<365);
     const monRec={};nf.forEach(r=>{const dt=new Date(r['Dt.Rec']);if(isNaN(dt))return;const m=dt.getFullYear()+'-'+(String(dt.getMonth()+1).padStart(2,'0'));if(m<'2025-01')return;if(!monRec[m])monRec[m]={p:new Set(),v:0,l:[]};monRec[m].p.add(r['PC']);monRec[m].v+=fv(r['Custo Total']);const dp=new Date(r['DT. PC']),dr=new Date(r['Dt.Rec']);const d=Math.round((dr-dp)/864e5);if(d>0&&d<365)monRec[m].l.push(d);});
