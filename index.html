@@ -417,6 +417,32 @@ function summarizeWeeks(rows,idKey){
   });
   return Object.values(map).sort((a,b)=>a.week.localeCompare(b.week)).map(r=>({week:r.week,label:r.label,pedidos:r.docs.size,itens:r.itens,valor:round2(r.valor)}));
 }
+function weekdayShort(i){return['Seg','Ter','Qua','Qui','Sex','Sab','Dom'][i]||'';}
+function summarizeWeekDays(rows,selectedWeek,dateKey,idKey){
+  const start=parseDate(selectedWeek);
+  if(!start)return[];
+  const dayMap={};
+  const days=Array.from({length:7},(_,i)=>{
+    const d=new Date(start);
+    d.setDate(start.getDate()+i);
+    const key=ymd(d);
+    dayMap[key]={date:key,label:`${weekdayShort(i)} ${fmtDateBr(key).slice(0,5)}`,docs:new Set(),itens:0,valor:0};
+    return dayMap[key];
+  });
+  (rows||[]).filter(r=>r.week_start===selectedWeek).forEach(r=>{
+    const raw=parseDate(r[dateKey]||r.data_ref||selectedWeek);
+    let key=selectedWeek;
+    if(raw){
+      const rawKey=ymd(raw);
+      key=weekStart(rawKey)===selectedWeek?rawKey:selectedWeek;
+    }
+    if(!dayMap[key])key=selectedWeek;
+    dayMap[key].docs.add(r[idKey]||r.documento||r.pc||`${r.origem||''}|${r.produto||''}|${r.desc||''}`);
+    dayMap[key].itens++;
+    dayMap[key].valor+=Number(r.valor||0);
+  });
+  return days.map(d=>({date:d.date,label:d.label,pedidos:d.docs.size,itens:d.itens,valor:round2(d.valor)}));
+}
 function ensureWeek(selected,buckets){
   if(!buckets.length)return'';
   if(selected&&buckets.some(b=>b.week===selected))return selected;
@@ -677,10 +703,11 @@ function renderFornTable(){
   document.getElementById('fornTbody').innerHTML=forn.map(f=>`<tr><td class="bold">${f.nome}</td><td class="num">${f.pcs||'—'}</td><td class="num bold">${fmtFull(f.valor)}</td><td class="num">${(f.valor/grandTotal*100).toFixed(1)}%</td><td class="num">${f.pend>0?`<span style="color:var(--red);font-weight:700">${f.pend}</span>`:'<span style="color:var(--green)">✓</span>'}</td></tr>`).join('');
 }
 
-function renderWeekChart(chartId,buckets,selected,barBase,barActive,lineColor){
+function renderWeekChart(chartId,rows,selectedWeek,dateKey,idKey,barColor,lineColor){
   killChart(chartId);
-  if(!buckets.length)return;
-  charts[chartId]=new Chart(document.getElementById(chartId),{data:{labels:buckets.map(b=>b.label),datasets:[{type:'bar',label:'Valor',data:buckets.map(b=>b.valor),backgroundColor:buckets.map(b=>b.week===selected?barActive:barBase),borderColor:buckets.map(()=>lineColor),borderWidth:1,borderRadius:4,yAxisID:'y',order:2},{type:'line',label:'Pedidos',data:buckets.map(b=>b.pedidos),borderColor:lineColor,backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:lineColor,yAxisID:'y2',order:1,tension:.35}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.dataset.yAxisID==='y'?fmtFull(c.raw):`${c.raw} pedidos`}}},scales:{y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmtR(v),font:{size:9},color:'#9aa3b0'},border:{display:false}},y2:{position:'right',grid:{display:false},ticks:{font:{size:9},color:lineColor},border:{display:false}},x:{grid:{display:false},ticks:{font:{size:9},color:'#9aa3b0'}}}}});
+  const days=summarizeWeekDays(rows,selectedWeek,dateKey,idKey);
+  if(!days.length)return;
+  charts[chartId]=new Chart(document.getElementById(chartId),{data:{labels:days.map(d=>d.label),datasets:[{type:'bar',label:'Valor',data:days.map(d=>d.valor),backgroundColor:days.map(()=>barColor),borderColor:days.map(()=>lineColor),borderWidth:1,borderRadius:4,yAxisID:'y',order:2},{type:'line',label:'Pedidos',data:days.map(d=>d.pedidos),borderColor:lineColor,backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:lineColor,yAxisID:'y2',order:1,tension:.35}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.dataset.yAxisID==='y'?fmtFull(c.raw):`${c.raw} pedidos`}}},scales:{y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmtR(v),font:{size:9},color:'#9aa3b0'},border:{display:false}},y2:{position:'right',grid:{display:false},ticks:{font:{size:9},color:lineColor},border:{display:false}},x:{grid:{display:false},ticks:{font:{size:9},color:'#9aa3b0'}}}}});
 }
 function fillWeekSelect(selectId,buckets,selected,onEmpty){
   const el=document.getElementById(selectId);
@@ -694,7 +721,7 @@ function renderRecebWeek(){
   const buckets=summarizeWeeks(rows,'pc');
   _recebWeek=ensureWeek(_recebWeek,buckets);
   fillWeekSelect('recebWeekSelect',buckets,_recebWeek,'Sem semanas');
-  renderWeekChart('chartRecebWeek',buckets,_recebWeek,'rgba(42,157,143,.18)','rgba(42,157,143,.42)','#2a9d8f');
+  renderWeekChart('chartRecebWeek',rows,_recebWeek,'prev_rec','pc','rgba(42,157,143,.32)','#2a9d8f');
   const weekRows=rows.filter(r=>r.week_start===_recebWeek).sort((a,b)=>(a.prev_rec||'').localeCompare(b.prev_rec||'')||String(a.pc||'').localeCompare(String(b.pc||''),'pt-BR',{numeric:true,sensitivity:'base'}));
   const pcs=new Set(weekRows.map(r=>r.pc).filter(Boolean)).size;
   const falt=weekRows.reduce((t,r)=>t+Number(r.qtd_falt||0),0);
@@ -707,7 +734,7 @@ function renderBuyWeek(){
   const buckets=summarizeWeeks(rows,'documento_key');
   _buyWeek=ensureWeek(_buyWeek,buckets);
   fillWeekSelect('buyWeekSelect',buckets,_buyWeek,'Sem semanas');
-  renderWeekChart('chartBuyWeek',buckets,_buyWeek,'rgba(201,168,76,.18)','rgba(201,168,76,.42)','#c9a84c');
+  renderWeekChart('chartBuyWeek',rows,_buyWeek,'data_ref','documento_key','rgba(201,168,76,.32)','#c9a84c');
   const weekRows=rows.filter(r=>r.week_start===_buyWeek).sort((a,b)=>(a.data_ref||'').localeCompare(b.data_ref||'')||String(a.documento||'').localeCompare(String(b.documento||''),'pt-BR',{numeric:true,sensitivity:'base'}));
   const docs=new Set(weekRows.map(r=>r.documento_key||r.documento).filter(Boolean)).size;
   const baseCnt=weekRows.filter(r=>r.origem==='Base pendente').length;
