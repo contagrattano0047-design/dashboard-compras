@@ -321,7 +321,7 @@ select.search-box{flex:0 0 auto;min-width:140px;max-width:180px}
 <script>
 const MSAL_CONFIG={auth:{clientId:'ed71fd58-5dff-4953-ada6-75a7a9f565cb',authority:'https://login.microsoftonline.com/a1847b36-b768-4044-b5eb-240a381d0724',redirectUri:window.location.origin+window.location.pathname},cache:{cacheLocation:'sessionStorage'}};
 const SHARE_URL='https://grattanomarck.sharepoint.com/:x:/s/SistemadeArquivosGrattanoMarck/IQBd_vA36SjET4KdrYtrIN7eAQ0Y2Zv2XEf71WO9P9_KlLE?e=7Qp8uD';
-const SCOPES=['https://graph.microsoft.com/Files.ReadWrite.All','https://graph.microsoft.com/Sites.ReadWrite.All'];
+const SCOPES=['https://graph.microsoft.com/Files.Read.All','https://graph.microsoft.com/Sites.Read.All','https://graph.microsoft.com/User.Read'];
 let msalApp=null,_token=null;
 async function initMsal(){if(!msalApp)msalApp=new msal.PublicClientApplication(MSAL_CONFIG);await msalApp.initialize();return msalApp;}
 async function getToken(){const app=await initMsal();const resp=await app.handleRedirectPromise();if(resp?.accessToken)return resp.accessToken;const accs=app.getAllAccounts();if(accs.length){try{return(await app.acquireTokenSilent({scopes:SCOPES,account:accs[0]})).accessToken;}catch(e){}}return null;}
